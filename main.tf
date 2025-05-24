@@ -40,6 +40,7 @@ resource "aws_route_table_association" "a" {
   route_table_id = aws_route_table.rt.id  # With the route table containing the route to the Internet Gateway
 }
 
+
 # Security Groups -----------------------------------------------------
 
 # Creating a security group for the web servers
@@ -54,6 +55,14 @@ resource "aws_security_group" "web" {
     to_port     = 80
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]  # Source CIDR (all IPs)
+  }
+
+  # Ingress rule for SSH
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Source CIDR (all IPs)
   }
 
   # Egress rule allowing all outbound traffic
@@ -73,6 +82,7 @@ resource "aws_launch_template" "web" {
   image_id      = "ami-0c02fb55956c7d316"  # Amazon Linux 2
   instance_type = "t2.micro" 
   user_data     = base64encode(file("startup.sh"))  # User data script to simulate load
+  key_name = "koderush-dev"  # Key pair for SSH access
 
   # Network interface configuration
   network_interfaces {
@@ -81,15 +91,15 @@ resource "aws_launch_template" "web" {
   }
 }
 
-# Load Balancer Resources ------------------------------------------------------
+# Load Balancer ------------------------------------------------------
 
 # Creating an Application Load Balancer
 resource "aws_lb" "web" {
-  name               = "web-lb"  # Name of the load balancer
-  internal           = false  # Makes it internet-facing
-  load_balancer_type = "application"  # ALB type
-  subnets            = aws_subnet.public[*].id  # Places in all public subnets
-  security_groups    = [aws_security_group.web.id]  # Attaches web security group
+  name               = "web-lb"
+  internal           = false  # Makes it accessible from the internet
+  load_balancer_type = "application"  # Load Balancer type
+  subnets            = aws_subnet.public[*].id  # Place it in all public subnets
+  security_groups    = [aws_security_group.web.id]  # Web security group
 }
 
 # Creating a target group for the load balancer
@@ -97,19 +107,19 @@ resource "aws_lb_target_group" "web" {
   name     = "web-tg"
   port     = 80 # Same as the security group ingress rule
   protocol = "HTTP"
-  vpc_id   = aws_vpc.main.id  
+  vpc_id   = aws_vpc.main.id # Target VPC 
   
-  # Health check configuration
+  # Health check
   health_check {
-    path = "/"  # Health check endpoint
+    path = "/"
   }
 }
 
-# Creates a listener for the load balancer on port 80
+# Creating a listener for the load balancer on port 80
 resource "aws_lb_listener" "web" {
-  load_balancer_arn = aws_lb.web.arn  # Associates with the ALB
-  port              = 80  # Listens on port 80
-  protocol          = "HTTP"  # Uses HTTP protocol
+  load_balancer_arn = aws_lb.web.arn  # Associating the listener with the load balancer
+  port              = 80 
+  protocol          = "HTTP" 
 
   # Default action forwards traffic to the target group
   default_action {
@@ -118,59 +128,86 @@ resource "aws_lb_listener" "web" {
   }
 }
 
-# Auto Scaling Group Resources -------------------------------------------------
+# Auto Scaling Group -------------------------------------------------
 
-# Creates an Auto Scaling Group
+# Creating an Auto Scaling Group
 resource "aws_autoscaling_group" "web" {
-  desired_capacity     = 1  # Desired number of instances
-  max_size             = 5  # Maximum number of instances
-  min_size             = 1  # Minimum number of instances
+  desired_capacity     = 1  # Desired # of instances
+  max_size             = 3  # Maximum # of instances
+  min_size             = 1  # Minimum # of instances
   vpc_zone_identifier  = aws_subnet.public[*].id  # Spread across public subnets
   target_group_arns    = [aws_lb_target_group.web.arn]  # Registers with target group
   
   # Launch template configuration
   launch_template {
-    id      = aws_launch_template.web.id  # Uses the web launch template
-    version = "$Latest"  # Always uses the latest version
+    id      = aws_launch_template.web.id  # Web launch template to test load
+    version = "$Latest"  # Always the latest version
   }
 
-  # Tag configuration for instances
+  # Tags
   tag {
     key                 = "Name"
-    value               = "web-instance"
+    value               = "web-load-instance"
     propagate_at_launch = true  # Applies to all launched instances
   }
 
-  health_check_type = "ELB"  # Uses ELB health checks
+  health_check_type = "ELB"  # Elastic Load Balancing health checks
 }
 
-# Auto Scaling Policy Resources ------------------------------------------------
+# Auto Scaling Policy ------------------------------------------------
 
-# Creates a scaling policy to add instances when scaling up
+# Scaling policy to add instances
 resource "aws_autoscaling_policy" "scale_up" {
-  name                   = "cpu-scale-up"  # Policy name
+  name                   = "cpu-scale-up"
   adjustment_type        = "ChangeInCapacity"  # Changes the capacity directly
   scaling_adjustment     = 1  # Adds 1 instance when triggered
   cooldown               = 120  # Cooldown period in seconds
-  autoscaling_group_name = aws_autoscaling_group.web.name  # Associates with ASG
+  autoscaling_group_name = aws_autoscaling_group.web.name  # Associates with the auto scaling group
 }
 
-# Creates a CloudWatch alarm to trigger scaling
+# Scaling policy to remove instances
+resource "aws_autoscaling_policy" "scale_down" {
+  name                   = "cpu-scale-down"
+  adjustment_type        = "ChangeInCapacity"
+  scaling_adjustment     = -1  # Removes 1 instance when triggered
+  cooldown               = 120
+  autoscaling_group_name = aws_autoscaling_group.web.name
+}
+
+# Creating a CloudWatch alarm to trigger scaling up
 resource "aws_cloudwatch_metric_alarm" "cpu_high" {
-  alarm_name          = "cpu-high"  # Alarm name
+  alarm_name          = "cpu-high" 
   comparison_operator = "GreaterThanThreshold"  # Triggers when above threshold
   evaluation_periods  = 2  # Number of periods to evaluate
   metric_name         = "CPUUtilization"  # Monitors CPU utilization
   namespace           = "AWS/EC2"  # AWS namespace for EC2 metrics
   period              = 120  # Evaluation period in seconds
   statistic           = "Average"  # Uses average CPU utilization
-  threshold           = 60  # Triggers at 60% CPU
+  threshold           = 60  # Triggers at 60% CPU usage
 
   # Dimensions to filter the metric
   dimensions = {
-    AutoScalingGroupName = aws_autoscaling_group.web.name  # Applies to our ASG
+    AutoScalingGroupName = aws_autoscaling_group.web.name  # Applies to the auto scaling group
   }
 
-  # Action to take when alarm triggers (execute scale-up policy)
+  # Execute scale-up policy when alarm triggers
   alarm_actions = [aws_autoscaling_policy.scale_up.arn]
+}
+
+# Creating a CloudWatch alarm to trigger scaling down
+resource "aws_cloudwatch_metric_alarm" "cpu_low" {
+  alarm_name          = "cpu-low"
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/EC2"
+  period              = 120
+  statistic           = "Average"
+  threshold           = 30  # Scale down when CPU usage is below 30%
+
+  dimensions = {
+    AutoScalingGroupName = aws_autoscaling_group.web.name
+  }
+
+  alarm_actions = [aws_autoscaling_policy.scale_down.arn]
 }
