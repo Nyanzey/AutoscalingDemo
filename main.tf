@@ -65,6 +65,14 @@ resource "aws_security_group" "web" {
     cidr_blocks = ["0.0.0.0/0"] # Source CIDR (all IPs)
   }
 
+  # Ingress rule allowing Flask API (port 5000)
+  ingress {
+    from_port   = 5000
+    to_port     = 5000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   # Egress rule allowing all outbound traffic
   egress {
     from_port   = 0  # All ports
@@ -83,6 +91,15 @@ resource "aws_launch_template" "web" {
   instance_type = "t2.micro" 
   user_data     = base64encode(file("startup.sh"))  # User data script to simulate load
   key_name = "koderush-dev"  # Key pair for SSH access
+
+  instance_market_options {
+    market_type = "spot"  # Using spot instances for cost efficiency
+
+    spot_options {
+      spot_instance_type = "one-time"  # One-time request for spot instances
+      instance_interruption_behavior = "terminate"  # Terminate on interruption
+    }
+  }
 
   # Network interface configuration
   network_interfaces {
@@ -105,23 +122,22 @@ resource "aws_lb" "web" {
 # Creating a target group for the load balancer
 resource "aws_lb_target_group" "web" {
   name     = "web-tg"
-  port     = 80 # Same as the security group ingress rule
+  port     = 5000
   protocol = "HTTP"
-  vpc_id   = aws_vpc.main.id # Target VPC 
+  vpc_id   = aws_vpc.main.id
   
-  # Health check
   health_check {
-    path = "/"
+    path = "/generate"
+    matcher = "200"
   }
 }
 
 # Creating a listener for the load balancer on port 80
 resource "aws_lb_listener" "web" {
-  load_balancer_arn = aws_lb.web.arn  # Associating the listener with the load balancer
-  port              = 80 
-  protocol          = "HTTP" 
+  load_balancer_arn = aws_lb.web.arn
+  port              = 5000
+  protocol          = "HTTP"
 
-  # Default action forwards traffic to the target group
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.web.arn
@@ -132,9 +148,9 @@ resource "aws_lb_listener" "web" {
 
 # Creating an Auto Scaling Group
 resource "aws_autoscaling_group" "web" {
-  desired_capacity     = 1  # Desired # of instances
-  max_size             = 3  # Maximum # of instances
-  min_size             = 1  # Minimum # of instances
+  desired_capacity     = 2  # Desired # of instances
+  max_size             = 2  # Maximum # of instances
+  min_size             = 2  # Minimum # of instances
   vpc_zone_identifier  = aws_subnet.public[*].id  # Spread across public subnets
   target_group_arns    = [aws_lb_target_group.web.arn]  # Registers with target group
   
@@ -165,15 +181,6 @@ resource "aws_autoscaling_policy" "scale_up" {
   autoscaling_group_name = aws_autoscaling_group.web.name  # Associates with the auto scaling group
 }
 
-# Scaling policy to remove instances
-resource "aws_autoscaling_policy" "scale_down" {
-  name                   = "cpu-scale-down"
-  adjustment_type        = "ChangeInCapacity"
-  scaling_adjustment     = -1  # Removes 1 instance when triggered
-  cooldown               = 120
-  autoscaling_group_name = aws_autoscaling_group.web.name
-}
-
 # Creating a CloudWatch alarm to trigger scaling up
 resource "aws_cloudwatch_metric_alarm" "cpu_high" {
   alarm_name          = "cpu-high" 
@@ -192,22 +199,4 @@ resource "aws_cloudwatch_metric_alarm" "cpu_high" {
 
   # Execute scale-up policy when alarm triggers
   alarm_actions = [aws_autoscaling_policy.scale_up.arn]
-}
-
-# Creating a CloudWatch alarm to trigger scaling down
-resource "aws_cloudwatch_metric_alarm" "cpu_low" {
-  alarm_name          = "cpu-low"
-  comparison_operator = "LessThanThreshold"
-  evaluation_periods  = 2
-  metric_name         = "CPUUtilization"
-  namespace           = "AWS/EC2"
-  period              = 120
-  statistic           = "Average"
-  threshold           = 30  # Scale down when CPU usage is below 30%
-
-  dimensions = {
-    AutoScalingGroupName = aws_autoscaling_group.web.name
-  }
-
-  alarm_actions = [aws_autoscaling_policy.scale_down.arn]
 }
