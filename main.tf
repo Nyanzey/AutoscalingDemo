@@ -127,8 +127,13 @@ resource "aws_lb_target_group" "web" {
   vpc_id   = aws_vpc.main.id
   
   health_check {
-    path = "/generate"
-    matcher = "200"
+    path                = "/health"
+    protocol            = "HTTP"
+    matcher             = "200"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
   }
 }
 
@@ -171,32 +176,3 @@ resource "aws_autoscaling_group" "web" {
 }
 
 # Auto Scaling Policy ------------------------------------------------
-
-# Scaling policy to add instances
-resource "aws_autoscaling_policy" "scale_up" {
-  name                   = "cpu-scale-up"
-  adjustment_type        = "ChangeInCapacity"  # Changes the capacity directly
-  scaling_adjustment     = 1  # Adds 1 instance when triggered
-  cooldown               = 120  # Cooldown period in seconds
-  autoscaling_group_name = aws_autoscaling_group.web.name  # Associates with the auto scaling group
-}
-
-# Creating a CloudWatch alarm to trigger scaling up
-resource "aws_cloudwatch_metric_alarm" "cpu_high" {
-  alarm_name          = "cpu-high" 
-  comparison_operator = "GreaterThanThreshold"  # Triggers when above threshold
-  evaluation_periods  = 2  # Number of periods to evaluate
-  metric_name         = "CPUUtilization"  # Monitors CPU utilization
-  namespace           = "AWS/EC2"  # AWS namespace for EC2 metrics
-  period              = 120  # Evaluation period in seconds
-  statistic           = "Average"  # Uses average CPU utilization
-  threshold           = 60  # Triggers at 60% CPU usage
-
-  # Dimensions to filter the metric
-  dimensions = {
-    AutoScalingGroupName = aws_autoscaling_group.web.name  # Applies to the auto scaling group
-  }
-
-  # Execute scale-up policy when alarm triggers
-  alarm_actions = [aws_autoscaling_policy.scale_up.arn]
-}

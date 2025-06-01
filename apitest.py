@@ -1,14 +1,3 @@
-#!/bin/bash
-
-yum update -y
-amazon-linux-extras enable python3.8
-yum install -y python38 git
-
-pip3 install flask pillow
-
-# Create app directory
-mkdir -p /opt/flask-api
-cat > /opt/flask-api/app.py << 'EOF'
 from flask import Flask, request, jsonify
 from PIL import Image
 from io import BytesIO
@@ -36,25 +25,3 @@ def health_check():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
-EOF
-
-# Create systemd service
-cat > /etc/systemd/system/flask-api.service << 'EOF'
-[Unit]
-Description=Flask Image Generation API
-After=network.target
-
-[Service]
-ExecStart=/usr/bin/python3 /opt/flask-api/app.py
-Restart=always
-User=root
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Enable and start the service
-systemctl daemon-reexec
-systemctl daemon-reload
-systemctl enable flask-api
-systemctl start flask-api
