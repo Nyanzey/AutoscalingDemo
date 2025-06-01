@@ -87,10 +87,19 @@ resource "aws_security_group" "web" {
 # Creating a launch template for EC2 instances
 resource "aws_launch_template" "web" {
   name_prefix   = "web-lt" 
-  image_id      = "ami-0c02fb55956c7d316"  # Amazon Linux 2
-  instance_type = "t2.micro" 
+  image_id      = "ami-074d9c327b5296aaa"  # Amazon DL Pytorch
+  instance_type = "g4dn.xlarge"  # GPU instance type for load testing
   user_data     = base64encode(file("startup.sh"))  # User data script to simulate load
   key_name = "koderush-dev"  # Key pair for SSH access
+
+  block_device_mappings {
+    device_name = "/dev/xvda"  # Root device name
+    ebs {
+      volume_size = 60  # Size of the root volume in GB
+      volume_type = "gp3"  # General Purpose SSD
+      delete_on_termination = true  # Delete volume on instance termination
+    }
+  }
 
   instance_market_options {
     market_type = "spot"  # Using spot instances for cost efficiency
@@ -168,11 +177,9 @@ resource "aws_autoscaling_group" "web" {
   # Tags
   tag {
     key                 = "Name"
-    value               = "web-load-instance"
+    value               = "sd15-api"
     propagate_at_launch = true  # Applies to all launched instances
   }
 
   health_check_type = "ELB"  # Elastic Load Balancing health checks
 }
-
-# Auto Scaling Policy ------------------------------------------------
